@@ -1,0 +1,11 @@
+.env
+.env.*
+
+#  python basic ignores ven
+__pycache__/
+venv/
+venv
+faiss_index
+
+
+
