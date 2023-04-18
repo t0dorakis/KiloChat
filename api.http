@@ -8,5 +8,5 @@ POST http://127.0.0.1:5000/chat
 content-type: application/json
 
 {
-  "question": "Whats theprice of a package of cigarettes?"
+  "question": "And whats his hobby?"
 }

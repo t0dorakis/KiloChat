@@ -1,77 +1,26 @@
 
-from langchain import PromptTemplate
 from langchain.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.document_loaders import TextLoader
+from langchain.agents import AgentType
+from langchain.memory import ConversationBufferMemory, ReadOnlySharedMemory
 from langchain import LLMChain
-from langchain.document_loaders import NotionDirectoryLoader
-from langchain.llms import OpenAI
-from langchain import OpenAI, ConversationChain
+from langchain.chains import RetrievalQA
 from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.agents import AgentExecutor, Tool, ZeroShotAgent, ConversationalAgent
 from dotenv import load_dotenv
 from langchain.chat_models import ChatOpenAI
-from langchain.agents import load_tools
 from langchain.agents import initialize_agent
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-    AIMessagePromptTemplate,
-    HumanMessagePromptTemplate,
-)
-from langchain.schema import (
-    AIMessage,
-    HumanMessage,
-    SystemMessage
-)
 import requests
 import os
+
 load_dotenv()
 
 os.environ["OPENAI_API_KEY"] = os.getenv('OPENAI_API_KEY')
 
-
-# PROMPT TEMPLATE
-template = """
-Context: {context}
-
-Question: {question}
-
-Answer like a heavy weight body builder
-Answer: """
-
-# prompt = PromptTemplate(input_variables=["question", "context"], template=template)
-# prompt.format(question="Can Barack Obama have a conversation with George Washington?")
-
-
 # LLM SETTING
 llm = ChatOpenAI(model='gpt-3.5-turbo', temperature=0.9)
-
-# CONVERSATION CHAIN
-
-# conversation = ConversationChain(llm=llm, verbose=True)
-# conversation.predict(input="Hi there!")
-# conversation.predict(input="Can we talk about AI?")
-# conversation.predict(input="I'm interested in Reinforcement Learning.")
-
-
-# AGENTS
-
-# tools = load_tools(["wikipedia", "llm-math"], llm=llm)
-# agent = initialize_agent(
-#     tools, llm, agent="zero-shot-react-description", verbose=True)
-# agent.run("Can Barack Obama have a conversation with George Washington?")
-
-
-# LOADING DOCUMENTS
-
-# loader = NotionDirectoryLoader("Notion_DB")
-
-# docs = loader.load()
-
-# url = "https://raw.githubusercontent.com/hwchase17/langchain/master/docs/modules/state_of_the_union.txt"
-# res = requests.get(url)
-# with open("state_of_the_union.txt", "w") as f:
-#   f.write(res.text)
 
 # Document Loader
 loader = TextLoader('./200kilo.txt')
@@ -82,47 +31,87 @@ text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
 docs = text_splitter.split_documents(documents)
 
 # Embeddings
-embeddings = HuggingFaceEmbeddings()
-
-# text = "This is a test document."
-# query_result = embeddings.embed_query(text)
-# doc_result = embeddings.embed_documents([text])
-db = FAISS.from_documents(docs, embeddings)
-
-# Save and load:
-db.save_local("faiss_index")
-new_db = FAISS.load_local("faiss_index", embeddings)
-# print(docs[0].page_content)
-
-# query = "What did the president say about Ketanji Brown Jackson"
-# docs = db.similarity_search(query)
+embeddings = OpenAIEmbeddings()
 
 
-# PROMPT EXECUTION
-prompt = PromptTemplate(
-    input_variables=["question", "context"],
-    template=template,
+def embed_data():
+    embeddings = OpenAIEmbeddings()
+    # Indexing
+    # Save in a Vector DB
+    print("Indexing...")
+    index = FAISS.from_documents(docs, embeddings)
+    print("Embeddings done. ✅", index)
+
+    return index
+
+
+index = embed_data()
+
+# TOOLS
+
+qa = RetrievalQA.from_chain_type(
+    llm=llm,
+    chain_type="stuff",
+    retriever=index.as_retriever(),
 )
 
-messages = [
-    SystemMessage(content="You are a body builder.\
-    You are working for 200kilo as a personal trainer and you also have good knwoldedge about them and their work.\
-    You will answer the questions of visitors of the website.  "),
+
+tools = [
+    Tool(
+        name="Search Information",
+        func=qa.run,
+        description="Useful to find information",
+    )
 ]
 
-chain = LLMChain(llm=llm, prompt=prompt)
+# MEMORY
+
+memory = ConversationBufferMemory(
+    memory_key="chat_history", return_messages=True)
+
+# The chat fails on finish if the memory is not read only
+readonlymemory = ReadOnlySharedMemory(memory=memory)
 
 
-# question = "Can Barack Obama have a conversation with George Washington?"
+# PROMPT
+
+prefix = """
+Tools:
+    """
+suffix = """ Have a conversation with a human, answering the following questions as best you can. You are a body builder.\
+    You are working for 200kilo as a personal trainer and you also have good knwoldedge about them and their work.\
+    You will answer the questions of visitors of the website. Answer in the tone of voice of a body builder. Begin!"
+{chat_history}
+Question: {input}
+{agent_scratchpad}"""
+
+human_prefix = "Answer in the tone of voice a super nice and friendly body builder-bro:"
 
 
-# print(llm_chain.run(prompt.format(
-#     question="Can Barack Obama have a conversation with George Washington?")))
+prompt = ConversationalAgent.create_prompt(
+    tools,
+    prefix=prefix,
+    suffix=suffix,
+    human_prefix=human_prefix,
+    input_variables=["input", "chat_history", "agent_scratchpad"]
+)
 
+# AGENT
 
-# write a function that takes in a question and returns an answer to be serverd over the web
+# TODO: dthis does not Model does not dream enough
 
+llm_chain = LLMChain(llm=ChatOpenAI(
+    temperature=0.9, model='gpt-3.5-turbo'), prompt=prompt)
+
+agent_chain = initialize_agent(
+    tools, llm, agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION, verbose=True, memory=memory)
 
 # Answering a question given its context
+
+
 def answer_question(question):
-  return chain.run(question=question, context=docs[0].page_content)
+    result = agent_chain.run(
+        input=question)
+
+    # TODO: add a token tracker
+    return result
